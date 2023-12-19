@@ -144,7 +144,7 @@ class BaseDetector(nn.Module):
             h, w, _ = img_meta['img_shape']
             img_show = img[:h, :w, :]
             name = img_meta['filename'].split('/')[-1]
-            name = "./results/visualize/" + name
+            name = ".results/single_pic/" + name
             bboxes = np.vstack(bbox_result)
             # draw segmentation masks
             # if segm_result is not None:

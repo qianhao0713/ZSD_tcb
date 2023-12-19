@@ -6,7 +6,8 @@ import numpy as np
 from albumentations import Compose
 from imagecorruptions import corrupt
 from numpy import random
-
+import math
+from PIL import Image
 from mmdet.core.evaluation.bbox_overlaps import bbox_overlaps
 from ..registry import PIPELINES
 
@@ -363,6 +364,98 @@ class RandomCrop(object):
     def __repr__(self):
         return self.__class__.__name__ + '(crop_size={})'.format(
             self.crop_size)
+
+
+@PIPELINES.register_module
+class RandomErasing(object):
+    """Random erase the image。
+
+    Args:
+        erase_size (tuple): expected size for erasing, (h, w).
+        # make sure h*w < min(area) in annotation --1000
+    """
+
+    def __init__(self, crop_size=(20, 20), mean = (123.675, 116.28, 103.53), prob = 0.8):
+        self.crop_size = crop_size
+        self.mean = mean
+        self.prob = prob
+    def __call__(self, results):
+        if random.uniform(0, 1) >= self.prob:
+            return results
+
+        img = results['img']
+        margin_h = max(img.shape[0] - self.crop_size[0], 0)
+        margin_w = max(img.shape[1] - self.crop_size[1], 0)
+        offset_h = np.random.randint(0, margin_h + 1)
+        offset_w = np.random.randint(0, margin_w + 1)
+        crop_y1, crop_y2 = offset_h, offset_h + self.crop_size[0]
+        crop_x1, crop_x2 = offset_w, offset_w + self.crop_size[1]
+
+        # crop the image
+        img[crop_y1:crop_y2, crop_x1:crop_x2, :] = self.mean
+        img_shape = img.shape
+        results['img'] = img
+        results['img_shape'] = img_shape
+
+        return results
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(erasing_size={})'.format(
+            self.crop_size)
+
+@PIPELINES.register_module
+class RandomErasing_truely(object):
+    '''
+    Class that performs Random Erasing in Random Erasing Data Augmentation by Zhong et al. 
+    -------------------------------------------------------------------------------------
+    probability: The probability that the operation will be performed.
+    sl: min erasing area
+    sh: max erasing area
+    r1: min aspect ratio
+    mean: erasing value
+    -------------------------------------------------------------------------------------
+    '''
+    def __init__(self, probability = 0.5, sl = 0.02, sh = 0.4, r1 = 0.3, mean=[0.4914, 0.4822, 0.4465]):
+        self.probability = probability
+        self.mean = mean
+        self.sl = sl
+        self.sh = sh
+        self.r1 = r1
+       
+    def __call__(self, results):
+        img = results['img']
+        if random.uniform(0, 1) > self.probability:
+            return results
+
+        for attempt in range(100):
+            area = img.size()[1] * img.size()[2]
+       
+            target_area = random.uniform(self.sl, self.sh) * area
+            aspect_ratio = random.uniform(self.r1, 1/self.r1)
+
+            h = int(round(math.sqrt(target_area * aspect_ratio)))
+            w = int(round(math.sqrt(target_area / aspect_ratio)))
+
+            if w < img.size()[2] and h < img.size()[1]:
+                x1 = random.randint(0, img.size()[1] - h)
+                y1 = random.randint(0, img.size()[2] - w)
+                if img.size()[0] == 3:
+                    img[0, x1:x1+h, y1:y1+w] = self.mean[0]
+                    img[1, x1:x1+h, y1:y1+w] = self.mean[1]
+                    img[2, x1:x1+h, y1:y1+w] = self.mean[2]
+                else:
+                    img[0, x1:x1+h, y1:y1+w] = self.mean[0]
+                
+                img_shape = img.shape
+                results['img'] = img
+                results['img_shape'] = img_shape
+
+        return results
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(erasing_size={})'.format(
+            self.crop_size)
+
 
 
 @PIPELINES.register_module
@@ -833,4 +926,60 @@ class Albu(object):
     def __repr__(self):
         repr_str = self.__class__.__name__
         repr_str += '(transformations={})'.format(self.transformations)
+        return repr_str
+
+@PIPELINES.register_module
+class GridMask(object):
+    def __init__(self, d1=10, d2=8, rotate = 1, ratio = 0.5, mode=1, prob=0.5):
+        self.d1 = d1
+        self.d2 = d2
+        self.rotate = rotate
+        self.ratio = ratio
+        self.mode=mode
+        self.prob = prob
+
+    def __call__(self, results):
+        if np.random.rand() > self.prob:#以一定的概率应用GridMask数据增强
+            return results
+        img = results['img']
+        h, w, c = img.shape
+
+        hh = math.ceil((math.sqrt(h*h + w*w)))
+        d = np.random.randint(self.d1, self.d2)#
+        # ratio表示原图片信息保留量，通过控制ratio可以控制填充区域的大小
+        self.l = math.ceil(d*(1-math.sqrt(1-self.ratio)))
+        mask = np.ones((hh, hh), np.float32)#创建了一个mask，很明显该mask比原图大，边长是原图的对角线，方便mask旋转
+
+        st_h = np.random.randint(d)
+        st_w = np.random.randint(d)
+        #这种方式相当于对十字口进行填充，到时候对mask取反就是对方框（Figure4中的黑框）填充
+        for i in range(-1, hh//d+1):#
+            s = d*i + st_h
+            t = s+self.l#可以看出l的含义
+            s = max(min(s, hh), 0)#不能超出mask的边界
+            t = max(min(t, hh), 0)
+            mask[s:t,:] = 0
+        for i in range(-1, hh//d+1):
+            s = d*i + st_w
+            t = s+self.l
+            s = max(min(s, hh), 0)#不能超出mask的边界
+            t = max(min(t, hh), 0)
+            mask[:,s:t] = 0
+        if self.rotate != 0:
+            r = np.random.randn(self.rotate)
+            mask = Image.fromarray(np.uint8(mask))
+            mask = mask.rotate(r)#可以旋转
+        mask = np.asarray(mask)
+        mask = mask[(hh-h)//2:(hh-h)//2+h, (hh-w)//2:(hh-w)//2+w]#截取图片大小的掩码
+        if self.mode == 1:
+            mask = 1-mask
+        mask = np.stack([mask,mask,mask],axis=-1)
+        img = img * mask
+
+        results['img'] = img
+        return results
+    
+    def __repr__(self):
+        repr_str = self.__class__.__name__
+        repr_str += '(Grid={})'.format(self.Grid)
         return repr_str

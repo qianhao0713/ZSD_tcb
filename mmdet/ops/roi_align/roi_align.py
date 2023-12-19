@@ -1,12 +1,19 @@
+import torch
 import torch.nn as nn
 from torch.autograd import Function
 from torch.autograd.function import once_differentiable
 from torch.nn.modules.utils import _pair
 
 from . import roi_align_cuda
+from torch.onnx.symbolic_helper import parse_args
 
 
 class RoIAlignFunction(Function):
+    
+    @staticmethod
+    @parse_args('v', 'v', 'is', 'f', 'i')
+    def symbolic(g, features, rois, out_size, spatial_scale, sample_num):
+        return g.op("custom::roi_align", features, rois, output_height_i=out_size[0], output_width_i=out_size[1], spatial_scale_f=spatial_scale, sampling_ratio_i=sample_num)
 
     @staticmethod
     def forward(ctx, features, rois, out_size, spatial_scale, sample_num=0):
@@ -26,7 +33,6 @@ class RoIAlignFunction(Function):
                                    sample_num, output)
         else:
             raise NotImplementedError
-
         return output
 
     @staticmethod
@@ -54,6 +60,7 @@ class RoIAlignFunction(Function):
 
 
 roi_align = RoIAlignFunction.apply
+roi_align_symb = RoIAlignFunction.symbolic
 
 
 class RoIAlign(nn.Module):

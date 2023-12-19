@@ -15,24 +15,32 @@ from mmdet.core import coco_eval, results2json, wrap_fp16_model
 from mmdet.datasets import build_dataloader, build_dataset
 from mmdet.models import build_detector
 
-
 def single_gpu_test(model, data_loader, show=False):
     model.eval()
     results = []
     dataset = data_loader.dataset
-    prog_bar = mmcv.ProgressBar(len(dataset))
+    warmup = None
+    for data in data_loader:
+        warmup = data
+        break
+    #for i in range(150):
+    #    with torch.no_grad():
+    #        result = model(return_loss=False, rescale=not show, **warmup)
     for i, data in enumerate(data_loader):
+        if i==1:
+            prog_bar = mmcv.ProgressBar(len(dataset)-5)
         with torch.no_grad():
             result = model(return_loss=False, rescale=not show, **data)
+            # print(result[0].shape)
         results.append(result)
-
         if show:
             # model.module.show_result(data, result)
             model.module.show_result(data, result, score_thr=0.30)
 
         batch_size = data['img'][0].size(0)
-        for _ in range(batch_size):
-            prog_bar.update()
+        if i>=5:
+            for _ in range(batch_size):
+                prog_bar.update()
     return results
 
 
@@ -197,11 +205,10 @@ def main():
     else:
         model = MMDistributedDataParallel(model.cuda())
         outputs = multi_gpu_test(model, data_loader, args.tmpdir)
-
     rank, _ = get_dist_info()
     if args.out and rank == 0:
-        print('\nwriting results to {}'.format(args.out))
-        mmcv.dump(outputs, args.out)
+        #print('\nwriting results to {}'.format(args.out))
+        #mmcv.dump(outputs, args.out)
         eval_types = args.eval
         if eval_types:
             print('Starting evaluate {}'.format(' and '.join(eval_types)))

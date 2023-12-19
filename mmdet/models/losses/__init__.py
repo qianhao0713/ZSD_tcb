@@ -11,6 +11,10 @@ from .utils import reduce_loss, weight_reduce_loss, weighted_loss
 from .lsoftmax import LSoftmaxLinear
 from .center_loss import CenterLoss
 from .L_n_pair_loss import NPairLoss
+from .soft_cross_entropy_loss import SoftCrossEntropyLoss
+from .discriminative_loss import DiscriminstiveContrastiveLoss
+from .contrastive_loss import ContrastiveLoss
+from .contrastive_loss_sem import ContrastiveSemLoss
 __all__ = [
     'accuracy', 'Accuracy', 'cross_entropy', 'binary_cross_entropy',
     'mask_cross_entropy', 'CrossEntropyLoss', 'sigmoid_focal_loss',
@@ -18,5 +22,6 @@ __all__ = [
     'BalancedL1Loss', 'mse_loss', 'MSELoss', 'iou_loss', 'bounded_iou_loss',
     'IoULoss', 'BoundedIoULoss', 'GHMC', 'GHMR', 'reduce_loss',
     'weight_reduce_loss', 'weighted_loss', 'LSoftmaxLinear', 'CenterLoss',
-    'NPairLoss'
+    'NPairLoss', 'SoftCrossEntropyLoss', 'DiscriminstiveContrastiveLoss',
+    'ContrastiveLoss', 'ContrastiveSemLoss'
 ]

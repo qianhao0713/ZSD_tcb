@@ -9,7 +9,7 @@ from .registry import DATASETS
 class CocoDataset_65_15(CustomDataset):
 
     CLASSES = ('person', 'bicycle', 'car', 'motorcycle', 'bus', 'truck', 'boat',
-               'traffic_light', 'fire_hydrant',
+               'traffic_light', 'fire_hydrant',#14 17 15 19 18 16 
                'stop_sign', 'bench', 'bird', 'dog',
                'horse', 'sheep', 'cow', 'elephant', 'zebra', 'giraffe',
                'backpack', 'umbrella', 'handbag', 'tie',

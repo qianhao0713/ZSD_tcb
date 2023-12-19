@@ -4,7 +4,8 @@ import torch.nn.functional as F
 from mmcv.cnn import normal_init
 
 from mmdet.core import delta2bbox
-from mmdet.ops import nms
+# from mmdet.ops import nms
+from mmcv.ops import nms
 from ..registry import HEADS
 from .ba_anchor_head import BackgroundAwareAnchorHead
 
@@ -106,8 +107,10 @@ class BackgroundAwareRPNHead(BackgroundAwareAnchorHead):
                                            (h >= cfg.min_bbox_size)).squeeze()
                 proposals = proposals[valid_inds, :]
                 scores = scores[valid_inds]
+            _, nms_indices = nms(proposals, scores, cfg.nms_thr)
             proposals = torch.cat([proposals, scores.unsqueeze(-1)], dim=-1)
-            proposals, _ = nms(proposals, cfg.nms_thr)
+            # proposals, _ = nms(proposals, cfg.nms_thr)
+            proposals = proposals[nms_indices, :]
             proposals = proposals[:cfg.nms_post, :]
             mlvl_proposals.append(proposals)
         proposals = torch.cat(mlvl_proposals, 0)

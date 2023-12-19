@@ -8,11 +8,63 @@ import pycocotools.mask as maskUtils
 from ..registry import PIPELINES
 
 
+import cv2 
+import cv2 as cv
+
+
+def frequency_filter(img_c, mask):
+    """
+    频域滤波
+    :param img: 图像
+    :param mask: 频域掩码
+    :return: filtered img: 滤波后图像
+    """
+    # Fourier trans
+    fft = cv.dft(np.float32(img_c), flags=cv.DFT_COMPLEX_OUTPUT)
+    fftc = np.fft.fftshift(fft)
+    # filter
+    fft_filtering = fftc * mask
+    # Fourier invtrans
+    ifft = np.fft.ifftshift(fft_filtering)
+    image_filtered = cv.idft(ifft)
+    image_filtered = cv.magnitude(image_filtered[:, :, 0],
+                                   image_filtered[:, :, 1])
+    return image_filtered
+
+
+def low_pass_filter(img, rw, rh):
+    """
+    低通滤波器
+    :param img: 输入图像
+    :param radius: 通过半径
+    :return: 滤波后图像
+    """
+    rw = int(rw)
+    rh = int(rh)
+    # size
+    h, w = img.shape[:2]
+    # mask
+    med_h = int(h / 2)
+    med_w = int(w / 2)
+    mask = np.zeros((h, w, 2), dtype=np.float32)
+    mask[med_h - rh:med_h + rh, med_w - rw:med_w + rw] = 1
+    B,G,R = cv.split(img)
+    Br = frequency_filter(B, mask)
+    Gr = frequency_filter(G, mask)
+    Rr = frequency_filter(R, mask)
+    res = cv.merge([Br, Gr, Rr])
+    res = (res - res.min())/(res.max() - res.min()) * 255
+    res = res.astype('uint8')
+    return res
+
 @PIPELINES.register_module
 class LoadImageFromFile(object):
 
-    def __init__(self, to_float32=False):
+    def __init__(self, to_float32=False, low_pass=False, r=(300,300)):
         self.to_float32 = to_float32
+        self.low_pass = low_pass
+        if self.low_pass:
+            self.rw, self.rh = r
 
     def __call__(self, results):
         if results['img_prefix'] is not None:
@@ -27,8 +79,10 @@ class LoadImageFromFile(object):
         results['img'] = img
         results['img_shape'] = img.shape
         results['ori_shape'] = img.shape
+        if self.low_pass:
+            results['img'] =low_pass_filter(img, self.rw, self.rh)
         return results
-
+    
     def __repr__(self):
         return self.__class__.__name__ + '(to_float32={})'.format(
             self.to_float32)
@@ -76,6 +130,7 @@ class LoadAnnotations(object):
         if isinstance(mask_ann, list):
             # polygon -- a single object might consist of multiple parts
             # we merge all parts into one mask rle code
+            print("mask_ann:"+str(mask_ann))
             rles = maskUtils.frPyObjects(mask_ann, img_h, img_w)
             rle = maskUtils.merge(rles)
         elif isinstance(mask_ann['counts'], list):

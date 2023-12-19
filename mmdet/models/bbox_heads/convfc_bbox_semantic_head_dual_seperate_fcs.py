@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from ..registry import HEADS
 from ..utils import ConvModule
 from .bbox_head_semantic_dual import BBoxSemanticHeadDual
-
+from ..VIT import ViT
 
 @HEADS.register_module
 class ConvFCSemanticBBoxHeadDualSeFc(BBoxSemanticHeadDual):
@@ -27,6 +27,8 @@ class ConvFCSemanticBBoxHeadDualSeFc(BBoxSemanticHeadDual):
                  conv_out_channels=256,
                  fc_out_channels=1024,
                  semantic_dims=300,
+                 use_ViT=False,
+                 ViT_depth=1,
                  conv_cfg=None,
                  norm_cfg=None,
                  *args,
@@ -36,6 +38,8 @@ class ConvFCSemanticBBoxHeadDualSeFc(BBoxSemanticHeadDual):
                 num_semantic_fcs + num_reg_convs + num_reg_fcs > 0)
         if num_semantic_convs > 0 or num_reg_convs > 0:
             assert num_shared_fcs == 0
+        if not self.with_semantic:
+            assert num_semantic_convs == 0 and num_semantic_fcs == 0
         if not self.with_reg:
             assert num_reg_convs == 0 and num_reg_fcs == 0
         self.num_shared_convs = num_shared_convs
@@ -48,6 +52,9 @@ class ConvFCSemanticBBoxHeadDualSeFc(BBoxSemanticHeadDual):
         self.fc_out_channels = fc_out_channels
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
+
+        self.use_ViT=use_ViT
+        
 
         # add shared convs and fcs
         self.shared_convs, self.shared_fcs, last_layer_dim = \
@@ -71,46 +78,87 @@ class ConvFCSemanticBBoxHeadDualSeFc(BBoxSemanticHeadDual):
                 self.semantic_last_dim *= self.roi_feat_area
             if self.num_reg_fcs == 0:
                 self.reg_last_dim *= self.roi_feat_area
+        if self.use_ViT:
+            self.transformers = nn.ModuleList()
+            for i in range(self.num_path):
+                trans = ViT(image_size=self.roi_feat_size[0], 
+                                    patch_size=1, 
+                                    num_classes=last_layer_dim, 
+                                    dim=semantic_dims, 
+                                    depth=ViT_depth, 
+                                    heads=8, 
+                                    mlp_dim=semantic_dims, 
+                                    pool='mean', 
+                                    channels = self.in_channels, 
+                                    dim_head = 64, 
+                                    dropout = 0.1, 
+                                    emb_dropout = 0.1,
+                                    with_mlp_head=False,
+                                    learnable_pos_emd=False)
+                self.transformers.append(trans)
+        else:
+            self.branch_fc_list = nn.ModuleList()
+            for i in range(self.num_path):
+                branch_fcs = nn.ModuleList()
+                for j in range(self.num_shared_fcs):
+                    in_channel = (self.in_channels * self.roi_feat_area if j == 0 else last_layer_dim)
+                    layer = nn.Linear(in_channel,last_layer_dim)
+                    branch_fcs.append(layer)
+                self.branch_fc_list.append(branch_fcs)
 
-        self.FFN_list = nn.ModuleList()
-        for i in range(self.num_path):
-            FFN = nn.ModuleList()
-            for j in range(self.num_shared_fcs):
-                in_channel = (self.in_channels * self.roi_feat_area if j == 0 else last_layer_dim)
-                layer = nn.Linear(in_channel,last_layer_dim)
-                FFN.append(layer)
-            self.FFN_list.append(FFN)
 
         self.relu = nn.ReLU(inplace=True)
-
-        self.T_list = nn.ModuleList()
-        self.M_list = nn.ModuleList()
-        self.d_T_list = nn.ModuleList()
-        self.d_M_list = nn.ModuleList()
+        self.sigm = nn.Sigmoid()
+        # fc_semantic --- T kernel_semantic --- M
+        # reconstruct fc_semantic and fc_reg since input channels are changed
+        self.fc_semantic_list = nn.ModuleList()
+        self.kernel_semantic_list = nn.ModuleList()
+        self.d_fc_semantic_list = nn.ModuleList()
+        self.d_kernel_semantic_list = nn.ModuleList()
         for i in range(self.num_path):
-            T = nn.Linear(self.semantic_last_dim, semantic_dims)
-            if self.with_decoder:
-                d_T = nn.Linear(semantic_dims, self.semantic_last_dim)
-            if self.voc is not None:
-                M = nn.Linear(self.voc.shape[1], self.vec_list[0].shape[0])  # n*300
+            if self.with_semantic:
+                fc_semantic = nn.Linear(self.semantic_last_dim, semantic_dims)
                 if self.with_decoder:
-                    d_M = nn.Linear(self.vec_list[0].shape[0], self.voc.shape[1])  # n*300
-            else:
-                M = nn.Linear(self.vec_list[0].shape[1], self.vec_list[0].shape[1])
-                if self.with_decoder:
-                    d_M = nn.Linear(self.vec_list[0].shape[1], self.vec_list[0].shape[1])  # n*300
-            self.T_list.append(T) # Ts
-            self.M_list.append(M) #Ms
+                    d_fc_semantic = nn.Linear(semantic_dims, self.semantic_last_dim)
+                if self.voc is not None:
+                    kernel_semantic = nn.Linear(self.voc.shape[1], self.vec_list[0].shape[0])  # n*300
+                    if self.with_decoder:
+                        d_kernel_semantic = nn.Linear(self.vec_list[0].shape[0], self.voc.shape[1])  # n*300
+                else:
+                    kernel_semantic = nn.Linear(self.vec_list[0].shape[1], self.vec_list[0].shape[1])
+                    if self.with_decoder:
+                        d_kernel_semantic = nn.Linear(self.vec_list[0].shape[1], self.vec_list[0].shape[1])  # n*300
+            self.fc_semantic_list.append(fc_semantic) # Ts
+            self.kernel_semantic_list.append(kernel_semantic) #Ms
             if self.with_decoder:
-                self.d_T_list.append(d_T)
-                self.d_M_list.append(d_M)
+                self.d_fc_semantic_list.append(d_fc_semantic)
+                self.d_kernel_semantic_list.append(d_kernel_semantic)
         
-        if self.with_reg:
+        self.attention_layer = nn.Linear(self.num_path*self.num_classes, self.num_classes)
+
+        if self.with_reg and self.reg_with_semantic:
+            self.fc_reg_sem = nn.Linear(self.reg_last_dim, semantic_dims)
+            if not self.share_semantic:
+                self.kernel_semantic_reg = nn.Linear(self.voc.shape[1], self.vec_list[0].shape[0])
             out_dim_reg = (4 if self.reg_class_agnostic else 4 *
                            self.num_classes)
+            self.fc_reg = nn.Linear(self.num_classes, out_dim_reg)
+
+        if self.with_reg and not self.reg_with_semantic:
+            # add use _generate
+            if self.use_generate:
+                out_dim_reg = 4 * self.vec_list[0].shape[1]
+            else:
+                out_dim_reg = (4 if self.reg_class_agnostic else 4 *
+                            self.num_classes)
             self.fc_reg = nn.Linear(self.reg_last_dim, out_dim_reg)
 
-        
+        self.fc_res = nn.Linear(self.vec_list[0].shape[0], self.vec_list[0].shape[0])
+        # self.fc_res = nn.Linear(self.semantic_last_dim, self.vec.shape[0])
+        # max_count = torch.zeros(2,self.num_classes,dtype = torch.float32, requires_grad=False).cuda()
+        # max_count = nn.Parameter(max_count)
+        # self.register_parameter("max_count", max_count)
+        # self.max_count = max_count
     def _add_conv_fc_branch(self,
                             num_branch_convs,
                             num_branch_fcs,
@@ -174,7 +222,16 @@ class ConvFCSemanticBBoxHeadDualSeFc(BBoxSemanticHeadDual):
                 x_reg = self.relu(fc(x_reg))
         # separate branches
         x_reg = x_reg
-        
+        x_semantic = x_reg
+        for conv in self.semantic_convs:
+            x_semantic = conv(x_semantic)
+        if x_semantic.dim() > 2:
+            if self.with_avg_pool:
+                x_semantic = self.avg_pool(x_semantic)
+            x_semantic = x_semantic.view(x_semantic.size(0), -1)
+        for fc in self.semantic_fcs:
+            x_semantic = self.relu(fc(x_semantic))
+
         for conv in self.reg_convs:
             x_reg = conv(x_reg)
         if x_reg.dim() > 2:
@@ -184,59 +241,100 @@ class ConvFCSemanticBBoxHeadDualSeFc(BBoxSemanticHeadDual):
         for fc in self.reg_fcs:
             x_reg = self.relu(fc(x_reg))
 
-        # classification branch
+        # different branch for different vec 
         semantic_score_list = []
         d_semantic_feature_list = []
-        # for each  branch 
         for i in range(self.num_path):
-            #FFN compress box features
-            x_bbox = x.view(x.size(0), -1)
-            for layer in self.FFN_list[i]:
-                x_bbox = self.relu(layer(x_bbox))
-            
-            # use T project to semantic space
-            x_semantic = self.T_list[i](x_bbox)
+            # VIT
+            if self.use_ViT:
+                semantic_feature = self.transformers[i](x)
+            #  fc layer
+            else:
+                x_semantic = x.view(x.size(0), -1)
+                for layer in self.branch_fc_list[i]:
+                    x_semantic = self.relu(layer(x_semantic))
+                semantic_feature = self.fc_semantic_list[i](x_semantic)
+            if self.with_semantic:
+                #normlize dy to st
+                seen_vecs = F.normalize(self.vec_list[i],2,0)
+                
+                if self.sync_bg:
+                    with torch.no_grad():
+                        seen_vecs[:, 0] = bg_vector
+                        #torch.save(bg_vector, "./bgTensor.pt")
+                        if not self.seen_class:
+                            self.vec_unseen[:, 0] = bg_vector
 
-            # normlize to unit vector
-            seen_vecs = F.normalize(self.vec_list[i],2,0)
-            if self.sync_bg:
-                with torch.no_grad():
-                    seen_vecs[:, 0] = bg_vector
-                    if not self.seen_class:
-                        self.vec_unseen[:, 0] = bg_vector
-            # compute similarity with extra vocabulary    
-            semantic_score = torch.mm(x_semantic, self.voc)
+                #update unseen class vec
+                if self.use_generate:
+                    with torch.no_grad():
+                        self.vec_unseen[:,1:] = seen_vecs[:, self.num_classes:]
 
-            # use M project to semantic space again
-            semantic_score = self.M_list[i](semantic_score)
-            if self.with_decoder:
-                d_semantic_score = self.d_M_list[i](semantic_score)
-                d_semantic_feature = torch.mm(d_semantic_score, self.voc.t())
-                d_semantic_feature = self.d_T_list[i](d_semantic_feature)
-            #compute similarity with seen class   
-            semantic_score = torch.mm(semantic_score, seen_vecs)
-            #collect branch result   
+                if self.voc is not None:
+                    semantic_score = torch.mm(semantic_feature, self.voc)
+                    if self.semantic_norm:
+                        semantic_score_norm = torch.norm(semantic_score, p=2, dim=1).unsqueeze(1).expand_as(semantic_score)
+                        semantic_score = semantic_score.div(semantic_score_norm + 1e-5)
+                        temp_norm = torch.norm(self.kernel_semantic.weight.data, p=2, dim=1).unsqueeze(1).expand_as(self.kernel_semantic.weight.data)
+                        self.kernel_semantic.weight.data = self.kernel_semantic.weight.data.div(temp_norm + 1e-5)
+                        semantic_score = self.kernel_semantic_list[i](semantic_score) * 20.0
+                    else:
+                        semantic_score = self.kernel_semantic_list[i](semantic_score)
+                    if self.with_decoder:
+                        d_semantic_score = self.d_kernel_semantic_list[i](semantic_score)
+                        d_semantic_feature = torch.mm(d_semantic_score, self.voc.t())
+                        d_semantic_feature = self.d_fc_semantic_list[i](d_semantic_feature)
+
+                    semantic_score = torch.mm(semantic_score, seen_vecs)
+                else:
+                    semantic_score = self.kernel_semantic_list[i](seen_vecs)
+                    semantic_score = torch.tanh(semantic_score)
+                    semantic_score = torch.mm(semantic_feature, semantic_score)
+            else:
+                semantic_score = None
             semantic_score_list.append(semantic_score)
-            d_semantic_feature_list.append(d_semantic_feature)
+            if self.with_decoder:
+                d_semantic_feature_list.append(d_semantic_feature)
 
-        # max function integrate
-        semantic_score = torch.max(semantic_score_list[0],semantic_score_list[1])
 
-        # regression branch
-        if self.with_reg:
+        # semantic_all = torch.cat(semantic_score_list,1)
+        # semantic_score = self.attention_layer(semantic_all)
+        if self.num_path > 1:
+            semantic_score = torch.max(semantic_score_list[0],semantic_score_list[1])
+        else:
+            semantic_score = semantic_score_list[0]
+
+        # static_passed = semantic_score.eq(semantic_score_list[0])
+        # d, n = static_passed.size()
+        # for j in range(n):
+        #     self.max_count[0,j] += (torch.sum(static_passed[:,j]))
+        #     self.max_count[1,j] += (d - torch.sum(static_passed[:,j]))
+
+        if self.with_reg and not self.reg_with_semantic:
             bbox_pred = self.fc_reg(x_reg)
+        elif self.with_reg and self.reg_with_semantic:
+            semantic_reg_feature = self.fc_reg_sem(x_reg)
+            if not self.share_semantic:
+                semantic_reg_score = torch.mm(self.kernel_semantic_reg(self.voc), self.vec)
+            else:
+                semantic_reg_score = torch.mm(self.kernel_semantic(self.voc), self.vec)
+            semantic_reg_score = torch.tanh(semantic_reg_score)
+            semantic_reg_score = torch.mm(semantic_reg_feature, semantic_reg_score)
+            bbox_pred = self.fc_reg(semantic_reg_score)
+        else:
+            bbox_pred = None
         if self.with_decoder:
-            return semantic_score, bbox_pred, x_bbox, d_semantic_feature_list
+            return semantic_score, bbox_pred, x_semantic, d_semantic_feature_list
         else:
             return semantic_score, bbox_pred
 
 
 @HEADS.register_module
-class TCB(ConvFCSemanticBBoxHeadDualSeFc):
+class SharedFCSemanticBBoxHeadDualSeFc(ConvFCSemanticBBoxHeadDualSeFc):
 
     def __init__(self, num_fcs=2, fc_out_channels=1024, *args, **kwargs):
         assert num_fcs >= 1
-        super(TCB, self).__init__(
+        super(SharedFCSemanticBBoxHeadDualSeFc, self).__init__(
             num_shared_convs=0,
             num_shared_fcs=num_fcs,
             num_semantic_convs=0,

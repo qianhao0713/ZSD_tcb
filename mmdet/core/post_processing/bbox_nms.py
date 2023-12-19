@@ -1,7 +1,8 @@
 import torch
 
 from mmdet.ops.nms import nms_wrapper
-
+# from torchvision.ops import nms
+from mmcv.ops import nms
 
 def multiclass_nms(multi_bboxes,
                    multi_scores,
@@ -45,7 +46,9 @@ def multiclass_nms(multi_bboxes,
         if score_factors is not None:
             _scores *= score_factors[cls_inds]
         cls_dets = torch.cat([_bboxes, _scores[:, None]], dim=1)
-        cls_dets, _ = nms_op(cls_dets, **nms_cfg_)
+        # cls_dets, _ = nms_op(cls_dets, **nms_cfg_)
+        _, nms_index = nms(_bboxes, _scores, 0.5)
+        cls_dets = cls_dets[nms_index, :]
         cls_labels = multi_bboxes.new_full((cls_dets.shape[0], ),
                                            i - 1,
                                            dtype=torch.long)
@@ -55,8 +58,9 @@ def multiclass_nms(multi_bboxes,
         bboxes = torch.cat(bboxes)
         labels = torch.cat(labels)
         if bboxes.shape[0] > max_num:
-            _, inds = bboxes[:, -1].sort(descending=True)
-            inds = inds[:max_num]
+            # _, inds = bboxes[:, -1].sort(descending=True)
+            _, inds = torch.topk(bboxes[:, -1], max_num)
+            # inds = inds[:max_num]
             bboxes = bboxes[inds]
             labels = labels[inds]
     else:

@@ -18,11 +18,16 @@ from .two_stage import TwoStageDetector
 from .zero_shot_two_stage import ZeroShotTwoStageDetector
 from .zero_shot_mask_rcnn import ZeroShotMaskRCNN
 from .zero_shot_faster_rcnn import ZeroShotFasterRCNN
+from .zero_shot_two_stage_visual_space import ZeroShotTwoStageDetectorVisualSpace
+from .zero_shot_mask_rcnn_visual_space import ZeroShotMaskRCNNVisualSpace
+from .zero_shot_two_stage_feature import ZeroShotMaskRCNNFeature
+from .zero_shot_two_stage_contrastive_multispace import ZeroShotTwoStageDetectorWithContrastive
 
 __all__ = [
     'BaseDetector', 'SingleStageDetector', 'TwoStageDetector', 'RPN',
     'FastRCNN', 'FasterRCNN', 'MaskRCNN', 'CascadeRCNN', 'HybridTaskCascade',
     'DoubleHeadRCNN', 'RetinaNet', 'FCOS', 'GridRCNN', 'MaskScoringRCNN',
     'RepPointsDetector', 'FOVEA', 'ZeroShotTwoStageDetector', 'ZeroShotMaskRCNN',
-    'ZeroShotFasterRCNN'
+    'ZeroShotFasterRCNN',  'ZeroShotTwoStageDetectorVisualSpace','ZeroShotMaskRCNNVisualSpace',
+    'ZeroShotMaskRCNNFeature', 'ZeroShotTwoStageDetectorWithContrastive'
 ]

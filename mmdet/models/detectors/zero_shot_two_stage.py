@@ -98,6 +98,14 @@ class ZeroShotTwoStageDetector(BaseDetector, RPNTestMixin, BBoxTestMixin,
             self.mask_head.init_weights()
             if not self.share_roi_extractor:
                 self.mask_roi_extractor.init_weights()
+    
+    def generate_mask(self, gt_label):
+        mask = []
+        for label_per_img in gt_label:
+            number = 0 if len(label_per_img)==1 else torch.randint(0,len(label_per_img)-1,(1,1)).squeeze()
+            val_masks = label_per_img[number]
+            mask.append(val_masks)
+        return mask
 
     def extract_feat(self, img):
         """Directly extract features from the backbone+neck
@@ -176,6 +184,8 @@ class ZeroShotTwoStageDetector(BaseDetector, RPNTestMixin, BBoxTestMixin,
         Returns:
             dict[str, Tensor]: a dictionary of loss components
         """
+        # print(img_meta[0]["filename"])
+        
         x = self.extract_feat(img)
 
         losses = dict()
@@ -222,6 +232,7 @@ class ZeroShotTwoStageDetector(BaseDetector, RPNTestMixin, BBoxTestMixin,
                     feats=[lvl_feat[i][None] for lvl_feat in x])
                 sampling_results.append(sampling_result)
 
+        # val_mask = self.generate_mask(gt_labels)
         # bbox head forward and loss
         if self.with_bbox:
             rois = bbox2roi([res.bboxes for res in sampling_results])
@@ -233,19 +244,21 @@ class ZeroShotTwoStageDetector(BaseDetector, RPNTestMixin, BBoxTestMixin,
             if self.bbox_with_decoder:
                 # if self.share_bg:
                 if self.bbox_sync_bg:
-                    cls_score, bbox_pred, x_semantic, d_feature = self.bbox_head(bbox_feats, bg_vector=bg_vector[0].view([300,]))
+                    cls_score, bbox_pred, x_semantic, d_feature = self.bbox_head(bbox_feats, bg_vector=bg_vector[0].view([-1,]))
                 else:
                     cls_score, bbox_pred, x_semantic, d_feature = self.bbox_head(bbox_feats)
 
                 bbox_targets = self.bbox_head.get_target(sampling_results,
                                                          gt_bboxes, gt_labels,
                                                          self.train_cfg.rcnn)
+                # if len(img_meta[0]["filename"].split('_')) == 3:
+                #     print("attention!")
                 loss_bbox = self.bbox_head.loss(cls_score, bbox_pred,
                                                 *bbox_targets, x_semantic=x_semantic, d_feature=d_feature,)
             else:
                 # if self.share_bg:
                 if self.bbox_sync_bg:
-                    cls_score, bbox_pred = self.bbox_head(bbox_feats, bg_vector=bg_vector[0].view([300, ]))
+                    cls_score, bbox_pred = self.bbox_head(bbox_feats, bg_vector=bg_vector[0].view([-1, ]))
                 else:
                     cls_score, bbox_pred = self.bbox_head(bbox_feats)
 
@@ -325,7 +338,7 @@ class ZeroShotTwoStageDetector(BaseDetector, RPNTestMixin, BBoxTestMixin,
             # if self.share_bg:
             if self.bbox_sync_bg:
                 det_bboxes, det_labels = self.simple_test_bboxes(
-                    x, img_meta, proposal_list, self.test_cfg.rcnn, with_decoder=True, rescale=rescale, bg_vector=bg_vector[0].view(300,))
+                    x, img_meta, proposal_list, self.test_cfg.rcnn, with_decoder=True, rescale=rescale, bg_vector=bg_vector[0].view(-1,))
             else:
                 det_bboxes, det_labels = self.simple_test_bboxes(
                     x, img_meta, proposal_list, self.test_cfg.rcnn, with_decoder=True, rescale=rescale)
@@ -333,7 +346,7 @@ class ZeroShotTwoStageDetector(BaseDetector, RPNTestMixin, BBoxTestMixin,
             # if self.share_bg:
             if self.bbox_sync_bg:
                 det_bboxes, det_labels = self.simple_test_bboxes(
-                    x, img_meta, proposal_list, self.test_cfg.rcnn, rescale=rescale, bg_vector=bg_vector[0].view(300,))
+                    x, img_meta, proposal_list, self.test_cfg.rcnn, rescale=rescale, bg_vector=bg_vector[0].view(-1,))
             else:
                 det_bboxes, det_labels = self.simple_test_bboxes(
                     x, img_meta, proposal_list, self.test_cfg.rcnn, rescale=rescale)

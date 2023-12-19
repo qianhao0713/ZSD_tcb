@@ -3,7 +3,8 @@ import torch
 
 from . import nms_cpu, nms_cuda
 from .soft_nms_cpu import soft_nms_cpu
-
+from torch.autograd import Function
+from torch.onnx.symbolic_helper import parse_args
 
 def nms(dets, iou_thr, device_id=None):
     """Dispatch to either CPU or GPU NMS implementations.
@@ -55,7 +56,6 @@ def nms(dets, iou_thr, device_id=None):
             inds = nms_cuda.nms(dets_th, iou_thr)
         else:
             inds = nms_cpu.nms(dets_th, iou_thr)
-
     if is_numpy:
         inds = inds.cpu().numpy()
     return dets[inds, :], inds
